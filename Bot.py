@@ -15,6 +15,42 @@ ib = IB()
 async def root(request):
     return response.text('Bot is online ... 🤖')
 
+
+async def create_braket_order(contract, amount, limit, takeprofit, stoploss):
+    bracket = ib.bracketOrder('BUY', amount, limit,
+                              takeprofit, stoploss, outsideRth=True)
+
+    gtddelta = (datetime.now() + timedelta(seconds=45)
+                ).strftime("%Y%m%d %H:%M:%S")
+    bracket.parent.tif = 'GTD'
+    bracket.parent.goodTillDate = gtddelta
+
+    for order in bracket:
+        ib.placeOrder(contract, order)
+
+
+async def get_contracts():
+    cur_month = datetime.datetime.now().strftime(format='%Y%m')
+
+    contract = Option(symbol='SPY', exchange='SMART',
+                      currency='USD', lastTradeDateOrContractMonth=cur_month)
+
+    contracts = ib.reqContractDetails(contract)
+    nextExpiryDate = min(
+        contracts, key=lambda x: x.realExpirationDate).realExpirationDate
+
+    nextExpiryContracts = list(filter(lambda con: con.realExpirationDate ==
+                               nextExpiryDate and con.contract.right == 'C', contracts))
+
+    # getting the stock price will be sent in the req
+    curStockPice = 457.78
+
+    closestTotheMoney = sorted(nextExpiryContracts, key=lambda conDet: (
+        abs(conDet.contract.strike - curStockPice), conDet.contract.strike))[0]
+
+    return closestTotheMoney
+
+
 async def checkIfReconnect(ib):
     print((datetime.datetime.now().strftime("%b %d %H:%M:%S")) +
           " Checking if we need to reconnect")
@@ -38,15 +74,19 @@ async def checkIfReconnect(ib):
                 "%b %d %H:%M:%S")) + " : " + str(e))
     return ''
 
+
 @app.route('/webhook', methods=['POST'])
 async def webhook(request):
-    print(request)  
+    print(request)
     if request.method == 'POST':
         # Check if we need to reconnect with IB
         await checkIfReconnect(ib)
         # Parse the string data from tradingview into a python dict
         data = request.json
         print(data)
+        # Get the contract details
+        contract = await get_contracts()
+
         # order = MarketOrder("BUY", 1, account=ib.wrapper.accounts[0])
         # print(data['symbol'])
         # print(data['symbol'][0:3])

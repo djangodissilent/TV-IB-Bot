@@ -1,15 +1,15 @@
 ,key,value
 0,secType,OPT
-1,conId,533951066
+1,conId,533407827
 2,symbol,SPY
 3,lastTradeDateOrContractMonth,20220118
-4,strike,471.0
+4,strike,458.0
 5,right,C
 6,multiplier,100
 7,exchange,SMART
 8,primaryExchange,
 9,currency,USD
-10,localSymbol,SPY   220118C00471000
+10,localSymbol,SPY   220118C00458000
 11,tradingClass,SPY
 12,includeExpired,False
 13,secIdType,
