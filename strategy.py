@@ -2,7 +2,6 @@
 # https://groups.io/g/insync/message/5632
 # https://groups.io/g/twsapi/topic/tws_api_child_order_questions/4045949?p=
 
-
 from ib_insync import *
 import datetime
 import random
@@ -26,25 +25,7 @@ def calculate_price(avgFillPrice: float, percentage: int, minTick: float) -> flo
     return round_nearest(avgFillPrice + avgFillPrice * (percentage/100), minTick)
 
 
-def create_child_contracts(parent, CurrentValue, **kwargs):
-    takeProfit = LimitOrder(
-        'SELL', 1, CurrentValue + CurrentValue*(40/100),
-        orderId=ib.client.getReqId(),
-        transmit=False,
-        parentId=parent.conId,
-        **kwargs)
-
-    stopLoss = StopOrder(
-        'SELL', 1, CurrentValue - CurrentValue*(60/100),
-        orderId=ib.client.getReqId(),
-        transmit=True,
-        parentId=parent.conId,
-        **kwargs)
-
-    return [takeProfit, stopLoss]
-
-
-def get_contract(curStockPice=0):
+def get_contract(curStockPice: float = None):
     """
     Get the closest to the money options contract
     """
@@ -53,8 +34,6 @@ def get_contract(curStockPice=0):
     contract = Option(symbol='SPY', exchange='SMART', right='C',
                       currency='USD', lastTradeDateOrContractMonth=cur_month)
 
-    # stk = Index(symbol='SPY', exchange='SMART', currency='USD')
-    # params = ib.reqSecDefOptParams(stk.symbol, '', stk.secType, stk.conId)
     contracts = ib.reqContractDetails(contract)
 
     expiringInFuture = list(filter(lambda con:  ((datetime.datetime.strptime(
@@ -65,7 +44,7 @@ def get_contract(curStockPice=0):
                                nextExpiryDate, contracts))
 
     # getting the stock price will be sent in the req
-    curStockPice = 441.78
+    curStockPice = 441.78 if curStockPice is None else curStockPice
 
     closestTotheMoney = sorted(nextExpiryContracts, key=lambda conDet: (
         abs(conDet.contract.strike - curStockPice), conDet.contract.strike))[0]
@@ -81,22 +60,33 @@ contract = contractDet.contract
 minTick = contractDet.minTick
 
 quant = 1  # how many contracts to buy
-# buying the option at market price
-order = LimitOrder('BUY', transmit=False, lmtPrice=800, totalQuantity=quant)
-trade = ib.placeOrder(contract, order)  # place the parent order
 
+# get the current ask for the contract to calculate
+# - limit order (ask + 5%)
+# - take profit and stopt loss initial levels (inital limit +40% and -60%)
+
+ib.reqMarketDataType(marketDataType=4)
+tickers = ib.reqTickers(contract)
+
+lmtPrice = calculate_price(tickers[0].askPrice, 5, minTick)
+initialTakeProfit = calculate_price(lmtPrice, 40, minTick)
+initialStopLoss = calculate_price(lmtPrice, -60, minTick)
+
+order = LimitOrder('BUY', transmit=False,
+                   lmtPrice=lmtPrice, totalQuantity=quant)
+parentTrade = ib.placeOrder(contract, order)
 
 profitTaker = LimitOrder(
-    'SELL', quant, 5000.0,
+    'SELL', quant, initialTakeProfit,
     orderId=ib.client.getReqId(),
     transmit=False,
-    parentId=trade.order.orderId)
+    parentId=parentTrade.order.orderId)
 
 stopLoss = StopOrder(
-    'SELL', quant, 2.0,
+    'SELL', quant, initialStopLoss,
     orderId=ib.client.getReqId(),
     transmit=True,
-    parentId=trade.order.orderId)
+    parentId=parentTrade.order.orderId)
 
 
 childrenTredes = []
@@ -104,25 +94,21 @@ for ord in [profitTaker, stopLoss]:
     t = ib.placeOrder(contract, ord)
     childrenTredes.append(t)
 
-# wait for parent to fill then modify the children
-while not trade.isDone():
+# wait for parent to fill then modify the children orders
+while not parentTrade.isDone():
     ib.sleep(0.1)
 
-averageFillPrice = trade.order.avgFillPrice
+averageFillPrice = parentTrade.orderStatus.avgFillPrice
 takeProfitPrice = calculate_price(averageFillPrice, 40, minTick)
 stopLossPrice = calculate_price(averageFillPrice, -60, minTick)
-
 profitTaker.lmtPrice = takeProfitPrice
 stopLoss.lmtPrice = stopLossPrice
+profitTaker.transmit = True
+stopLoss.transmit = True
 
 # modify the children orders
-for order in [takeProfit, stopLoss]:
-    t = ib.placeorderer(contract, order)
+for order in [profitTaker, stopLoss]:
+    t = ib.placeOrder(contract, order)
     childrenTredes.append(t)
-
-for t in childrenTredes:
-    while not t.isDone():
-        ib.sleep(0.1)
-
 
 ib.disconnect()
