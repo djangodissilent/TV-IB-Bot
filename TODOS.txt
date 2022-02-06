@@ -1,0 +1,3 @@
+Adding two orders:  Order rejected - reason:Cannot have open orders on both sides of the same US Option contract.
+
+Market Data recieved is not live: subscription

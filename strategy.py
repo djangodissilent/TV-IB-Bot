@@ -5,14 +5,38 @@
 from ib_insync import *
 import datetime
 import random
-
 from decimal import Decimal
 import math
+from pytz import timezone
+
+class ExecutionStatus:
+    """
+    Execution status of the order
+    """
+    PendingSubmit = 'PendingSubmit'
+    PendingCancel = 'PendingCancel'
+    PreSubmitted = 'PreSubmitted'
+    Submitted = 'Submitted'
+    Cancelled = 'Cancelled'
+    Filled = 'Filled'
+    Inactive = 'Inactive'
+    Expired = 'Expired'
+    Rejected = 'Rejected'
+    Suspended = 'Suspended'
+    PendingReplace = 'PendingReplace'
 
 
 def round_nearest(num: float, to: float) -> float:
     """
     Round the nearest number to the nearest multiple of to
+
+    Args:
+        num (float): Number to be rounded
+        to (float): Number to be rounded to
+
+    Returns:
+        float: Rounded number
+
     """
     num, to = Decimal(str(num)), Decimal(str(to))
     return float(round(num / to) * to)
@@ -21,94 +45,126 @@ def round_nearest(num: float, to: float) -> float:
 def calculate_price(avgFillPrice: float, percentage: int, minTick: float) -> float:
     """
     Calculate the price based on the average fill price and the percentage
+
+    Args:
+        avgFillPrice (float): Average fill price for the trade
+        percentage (int): Percentage to be added (plus or minus) to the price
+        minTick (float): Minimum tick size for the underlying contract
+
+    Returns:
+        float: modified price based on the percentage
     """
     return round_nearest(avgFillPrice + avgFillPrice * (percentage/100), minTick)
 
 
-def get_contract(curStockPice: float = None):
+def get_contract_details(curPrice: float = None, symbol: str = 'SPY', right: str = 'C') -> ContractDetails:
     """
     Get the closest to the money options contract
+
+    Args:
+        curPrice (float): Current stock price
+        right (str): Direction of the contract
+
+    Returns:
+        Contract: ContractDetails
     """
-    cur_month = datetime.datetime.now().strftime(format='%Y%m')
-
-    contract = Option(symbol='SPY', exchange='SMART', right='C',
+    curPrice = 441.78 if curPrice is None else curPrice
+    cur_month = datetime.datetime.now(
+        tz=timezone('US/Eastern')).strftime(format='%Y%m')
+    contract = Option(symbol=symbol, exchange='SMART', right=right,
                       currency='USD', lastTradeDateOrContractMonth=cur_month)
-
     contracts = ib.reqContractDetails(contract)
 
+    aSecondBeforeMidnight = 86340
     expiringInFuture = list(filter(lambda con:  ((datetime.datetime.strptime(
-        con.realExpirationDate, '%Y%m%d') + datetime.timedelta(0, 86340, 0)) - (datetime.datetime.now())).days >= 0, contracts))
+        con.realExpirationDate, '%Y%m%d') + datetime.timedelta(0, aSecondBeforeMidnight, 0)) - (datetime.datetime.now())).days >= 0, contracts))
     nextExpiryDate = min(
         expiringInFuture, key=lambda x: x.realExpirationDate).realExpirationDate
     nextExpiryContracts = list(filter(lambda con: con.realExpirationDate ==
                                nextExpiryDate, contracts))
 
-    # getting the stock price will be sent in the req
-    curStockPice = 441.78 if curStockPice is None else curStockPice
-
+    # get the closest contract to the money
+    # - If tie and right is call, get the one with the lower strike price
+    # - If tie and right is put, get the one with the higher strike price
     closestTotheMoney = sorted(nextExpiryContracts, key=lambda conDet: (
-        abs(conDet.contract.strike - curStockPice), conDet.contract.strike))[0]
+        abs(conDet.contract.strike - curPrice), conDet.contract.strike if right == 'C' else -conDet.contract.strike))[0]
 
     return closestTotheMoney
 
 
+
+def place_orders(curPrice: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> ExecutionStatus:
+    """
+    - Make a brackt order with (defualt +5%) parent limit order
+    - Modify children on fill based on avg fill of parent and (default +40%) take profit and (default -60%) stop loss percentages
+
+    Args:
+        curPrice (float): Current stock price
+        symbol (str): Stock symbol
+        right (str): Direction of the contract (CALL, PUT)
+        quantity (int): Quantity to be bought
+        stopLossPercent (int): Stop loss percentage
+        takeProfitPercent (int): Take profit percentage
+    Returns:
+        status: ExecutionStatus
+    """
+
+    contractDetail = get_contract_details(
+        curPrice=curPrice, symbol=symbol, right=right)
+    contract = contractDetail.contract
+    minTick = contractDetail.minTick
+    quant = quantity
+
+    # get the current ask for the contract to calculate
+    # - limit order (ask + (ask)* parentLimitPercent%)
+    limitPercent = parentLimitPercent
+    ib.reqMarketDataType(marketDataType=4)  # chage to 1 at production
+    tickers = ib.reqTickers(contract)
+    lmtPrice = calculate_price(tickers[0].ask, limitPercent, minTick)
+    initialTakeProfit = calculate_price(lmtPrice, takeProfitPercent, minTick)
+    initialStopLoss = calculate_price(lmtPrice, -stopLossPercent, minTick)
+
+    parentOrder = LimitOrder('BUY', transmit=False,
+                             lmtPrice=lmtPrice, totalQuantity=quant)
+    parentTrade = ib.placeOrder(contract, parentOrder)
+
+    profitTaker = LimitOrder(
+        'SELL', quant, initialTakeProfit,
+        orderId=ib.client.getReqId(),
+        transmit=False,
+        parentId=parentTrade.order.orderId)
+    stopLoss = StopOrder(
+        'SELL', quant, initialStopLoss,
+        orderId=ib.client.getReqId(),
+        transmit=True,
+        parentId=parentTrade.order.orderId)
+
+    for ord in [profitTaker, stopLoss]:
+        ib.placeOrder(contract, ord)
+
+    while not parentTrade.isDone():
+        ib.sleep(0.01)
+
+    # modify the children orders based on avg fill price
+    averageFillPrice = parentTrade.orderStatus.avgFillPrice
+    takeProfitPrice = calculate_price(
+        averageFillPrice, takeProfitPercent, minTick)
+    stopLossPrice = calculate_price(
+        averageFillPrice, -stopLossPercent, minTick)
+    profitTaker.lmtPrice = takeProfitPrice
+    stopLoss.lmtPrice = stopLossPrice
+    profitTaker.transmit = True
+    stopLoss.transmit = True
+
+    childrenTrades = []
+    for order in [profitTaker, stopLoss]:
+        childrenTrades.append(ib.placeOrder(contract, order))
+
+    return childrenTrades
+
+
 ib = IB()
 ib.connect('127.0.0.1', 7497, clientId=random.randint(0, 9999))
-
-contractDet = get_contract()
-contract = contractDet.contract
-minTick = contractDet.minTick
-
-quant = 1  # how many contracts to buy
-
-# get the current ask for the contract to calculate
-# - limit order (ask + 5%)
-# - take profit and stopt loss initial levels (inital limit +40% and -60%)
-
-ib.reqMarketDataType(marketDataType=4)
-tickers = ib.reqTickers(contract)
-
-lmtPrice = calculate_price(tickers[0].askPrice, 5, minTick)
-initialTakeProfit = calculate_price(lmtPrice, 40, minTick)
-initialStopLoss = calculate_price(lmtPrice, -60, minTick)
-
-order = LimitOrder('BUY', transmit=False,
-                   lmtPrice=lmtPrice, totalQuantity=quant)
-parentTrade = ib.placeOrder(contract, order)
-
-profitTaker = LimitOrder(
-    'SELL', quant, initialTakeProfit,
-    orderId=ib.client.getReqId(),
-    transmit=False,
-    parentId=parentTrade.order.orderId)
-
-stopLoss = StopOrder(
-    'SELL', quant, initialStopLoss,
-    orderId=ib.client.getReqId(),
-    transmit=True,
-    parentId=parentTrade.order.orderId)
-
-
-childrenTredes = []
-for ord in [profitTaker, stopLoss]:
-    t = ib.placeOrder(contract, ord)
-    childrenTredes.append(t)
-
-# wait for parent to fill then modify the children orders
-while not parentTrade.isDone():
-    ib.sleep(0.1)
-
-averageFillPrice = parentTrade.orderStatus.avgFillPrice
-takeProfitPrice = calculate_price(averageFillPrice, 40, minTick)
-stopLossPrice = calculate_price(averageFillPrice, -60, minTick)
-profitTaker.lmtPrice = takeProfitPrice
-stopLoss.lmtPrice = stopLossPrice
-profitTaker.transmit = True
-stopLoss.transmit = True
-
-# modify the children orders
-for order in [profitTaker, stopLoss]:
-    t = ib.placeOrder(contract, order)
-    childrenTredes.append(t)
+place_orders(curPrice=441.78, symbol='SPY', right='C', quantity=1, parentLimitPercent=5, stopLossPercent=60, takeProfitPercent=40)
 
 ib.disconnect()
