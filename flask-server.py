@@ -17,9 +17,9 @@ def webhook():
 
     print(request.data)
     data = request.data
-    redisClient.publish('TradingView', data)
+    numberOfRecievers = redisClient.publish('TradingView', data)
 
-    return {'status': 'success'}
+    return {'status': 'Success'} if numberOfRecievers else {'status': 'Failure'}
 
 
 @app.get("/")

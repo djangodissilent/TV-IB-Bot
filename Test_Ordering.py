@@ -9,22 +9,6 @@ from decimal import Decimal
 import math
 from pytz import timezone
 
-class ExecutionStatus:
-    """
-    Execution status of the order
-    """
-    PendingSubmit = 'PendingSubmit'
-    PendingCancel = 'PendingCancel'
-    PreSubmitted = 'PreSubmitted'
-    Submitted = 'Submitted'
-    Cancelled = 'Cancelled'
-    Filled = 'Filled'
-    Inactive = 'Inactive'
-    Expired = 'Expired'
-    Rejected = 'Rejected'
-    Suspended = 'Suspended'
-    PendingReplace = 'PendingReplace'
-
 
 def round_nearest(num: float, to: float) -> float:
     """
@@ -57,18 +41,17 @@ def calculate_price(avgFillPrice: float, percentage: int, minTick: float) -> flo
     return round_nearest(avgFillPrice + avgFillPrice * (percentage/100), minTick)
 
 
-def get_contract_details(curPrice: float = None, symbol: str = 'SPY', right: str = 'C') -> ContractDetails:
+def get_contract_details(stock_price: float = None, symbol: str = 'SPY', right: str = 'C') -> ContractDetails:
     """
     Get the closest to the money options contract
 
     Args:
-        curPrice (float): Current stock price
+        stock_price (float): Current stock price
         right (str): Direction of the contract
 
     Returns:
         Contract: ContractDetails
     """
-    curPrice = 441.78 if curPrice is None else curPrice
     cur_month = datetime.datetime.now(
         tz=timezone('US/Eastern')).strftime(format='%Y%m')
     contract = Option(symbol=symbol, exchange='SMART', right=right,
@@ -87,19 +70,18 @@ def get_contract_details(curPrice: float = None, symbol: str = 'SPY', right: str
     # - If tie and right is call, get the one with the lower strike price
     # - If tie and right is put, get the one with the higher strike price
     closestTotheMoney = sorted(nextExpiryContracts, key=lambda conDet: (
-        abs(conDet.contract.strike - curPrice), conDet.contract.strike if right == 'C' else -conDet.contract.strike))[0]
+        abs(conDet.contract.strike - stock_price), conDet.contract.strike if right == 'C' else -conDet.contract.strike))[0]
 
     return closestTotheMoney
 
 
-
-def place_orders(curPrice: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> ExecutionStatus:
+def place_orders(stock_price: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> None:
     """
     - Make a brackt order with (defualt +5%) parent limit order
     - Modify children on fill based on avg fill of parent and (default +40%) take profit and (default -60%) stop loss percentages
 
     Args:
-        curPrice (float): Current stock price
+        stock_price (float): Current stock price
         symbol (str): Stock symbol
         right (str): Direction of the contract (CALL, PUT)
         quantity (int): Quantity to be bought
@@ -110,7 +92,7 @@ def place_orders(curPrice: float, symbol='SPY', right: str = 'C', quantity: int 
     """
 
     contractDetail = get_contract_details(
-        curPrice=curPrice, symbol=symbol, right=right)
+        stock_price=stock_price, symbol=symbol, right=right)
     contract = contractDetail.contract
     minTick = contractDetail.minTick
     quant = quantity
@@ -160,12 +142,13 @@ def place_orders(curPrice: float, symbol='SPY', right: str = 'C', quantity: int 
     for order in [profitTaker, stopLoss]:
         childrenTrades.append(ib.placeOrder(contract, order))
 
-    return childrenTrades
+    return None
 
 
 try:
     ib = IB()
     ib.connect('127.0.0.1', 7497, clientId=random.randint(0, 9999))
-    place_orders(curPrice=450, symbol='SPY', right='C', quantity=100, parentLimitPercent=5, stopLossPercent=60, takeProfitPercent=40)
+    place_orders(stock_price=451, symbol='SPY', right='C', quantity=1,
+                 parentLimitPercent=5, stopLossPercent=60, takeProfitPercent=40)
 finally:
     ib.disconnect()

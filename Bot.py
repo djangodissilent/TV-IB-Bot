@@ -27,7 +27,7 @@ async def webhook(request):
     data = request.json
     print(data)
     childrenTrades = orderPlacer.place_orders(
-        curPrice=data['curPrice'], symbol=data['symbol'], right=data['right'],)
+        stock_price=data['stock_price'], symbol=data['symbol'], right=data['right'],)
     return response.json({'status': 'success', 'childrenTrades': childrenTrades}, status=200)
 
 

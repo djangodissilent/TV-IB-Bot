@@ -44,18 +44,18 @@ class OrderPlacer:
         """
         return self.round_nearest(avgFillPrice + avgFillPrice * (percentage/100), minTick)
 
-    async def get_contract_details(self, curPrice: float = None, symbol: str = 'SPY', right: str = 'C') -> ContractDetails:
+    async def get_contract_details(self, stock_price: float = None, symbol: str = 'SPY', right: str = 'C') -> ContractDetails:
         """
         Get the closest to the money options contract
 
         Args:
-            curPrice (float): Current stock price
+            stock_price (float): Current stock price
             right (str): Direction of the contract
 
         Returns:
             Contract: ContractDetails
         """
-        curPrice = 448.7 if curPrice is None else curPrice
+        stock_price = 448.7 if stock_price is None else stock_price
         cur_month = datetime.datetime.now(
             tz=timezone('US/Eastern')).strftime(format='%Y%m')
         contract = Option(symbol=symbol, exchange='SMART', right=right,
@@ -74,7 +74,7 @@ class OrderPlacer:
         # - If tie and right is call, get the one with the lower strike price
         # - If tie and right is put, get the one with the higher strike price
         closestTotheMoney = sorted(nextExpiryContracts, key=lambda conDet: (
-            abs(conDet.contract.strike - curPrice), conDet.contract.strike if right == 'C' else -conDet.contract.strike))[0]
+            abs(conDet.contract.strike - stock_price), conDet.contract.strike if right == 'C' else -conDet.contract.strike))[0]
 
         return closestTotheMoney
 
@@ -89,19 +89,21 @@ class OrderPlacer:
         Returns:
             Ticker: Ticker for the contract
         """
+        self.ib.reqMarketDataType(marketDataType=1)
+        data = self.ib.reqMktData(contract, '', True, False)
         tickers = await self.ib.reqTickersAsync(contract)
         while math.isnan(tickers[0].ask):
             await asyncio.sleep(0.01)
             tickers = await self.ib.reqTickersAsync(contract)
         return tickers
 
-    async def place_orders(self, curPrice: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> list[Order]:
+    async def place_orders(self, stock_price: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> None:
         """
         - Make a bracket order with (defualt +5%) parent limit order
         - Modify children on fill based on avg fill of parent and (default +40%) take profit and (default -60%) stop loss percentages
 
         Args:
-            curPrice (float): Current stock price
+            stock_price (float): Current stock price
             symbol (str): Stock symbol
             right (str): Direction of the contract (CALL, PUT)
             quantity (int): Quantity to be bought
@@ -112,7 +114,7 @@ class OrderPlacer:
         """
 
         contractDetail = await self.get_contract_details(
-            curPrice=curPrice, symbol=symbol, right=right)
+            stock_price=stock_price, symbol=symbol, right=right)
         contract = contractDetail.contract
         minTick = contractDetail.minTick
         quant = quantity
@@ -120,7 +122,7 @@ class OrderPlacer:
         # get the current ask for the contract to calculate
         # - limit order (ask + (ask)* parentLimitPercent%)
         limitPercent = parentLimitPercent
-        self.ib.reqMarketDataType(marketDataType=4)  # chage to 1 at production
+        self.ib.reqMarketDataType(marketDataType=1)  # chage to 1 at production
 
         tickers = await self.get_tickers(contract)
         lmtPrice = self.calculate_price(tickers[0].ask, limitPercent, minTick)
@@ -129,6 +131,10 @@ class OrderPlacer:
         initialStopLoss = self.calculate_price(
             lmtPrice, -stopLossPercent, minTick)
 
+        print("Ask for the contract: ", tickers[0].ask)
+        print("Initial LmtPrice +5%: ", lmtPrice)
+        print("Initial Take Profit 40%: ", initialTakeProfit)
+        print("Initial Stop Loss 60%: ", initialStopLoss)
         parentOrder = LimitOrder('BUY', transmit=False,
                                  lmtPrice=lmtPrice, totalQuantity=quant)
         parentTrade = self.ib.placeOrder(contract, parentOrder)
@@ -161,48 +167,11 @@ class OrderPlacer:
         profitTaker.transmit = True
         stopLoss.transmit = True
 
+        print("Avg Fill Price: ", averageFillPrice)
+        print("Take Profit Price: ", takeProfitPrice)
+        print("Stop Loss Price 40%: ", stopLossPrice)
         childrenTrades = []
         for order in [profitTaker, stopLoss]:
             childrenTrades.append(self.ib.placeOrder(contract, order))
 
-        return childrenTrades
-
-
-def main(data):
-    ib = IB()
-    ib.connect('127.0.0.1', 7497, clientId=random.randint(0, 9999))
-    op = OrderPlacer(ib=ib)
-    print(data)
-
-    DEFUALT_PRICE = None
-    DEFUALT_SYMBOL = 'SPY'
-    DEFUALT_RIGHT = 'C'
-    DEFUALT_QUANTITY = 1
-    DEFUALT_PARENT_LIMIT_PERCENT = 5
-    DEFUALT_STOP_LOSS_PERCENT = 60
-    DEFUALT_TAKE_PROFIT_PERCENT = 40
-
-    curPrice = DEFUALT_PRICE if 'curPrice' not in data else data['curPrice']
-    symbol = DEFUALT_SYMBOL if 'symbol' not in data else data['symbol']
-    right = DEFUALT_RIGHT if 'right' not in data else data['right']
-    quantity = DEFUALT_QUANTITY if 'quantity' not in data else data['quantity']
-    parentLimitPercent = DEFUALT_PARENT_LIMIT_PERCENT if 'parentLimitPercent' not in data else data[
-        'parentLimitPercent']
-    stopLossPercent = DEFUALT_STOP_LOSS_PERCENT if 'stopLossPercent' not in data else data[
-        'stopLossPercent']
-    takeProfitPercent = DEFUALT_TAKE_PROFIT_PERCENT if 'takeProfitPercent' not in data else data[
-        'takeProfitPercent']
-
-    trades = op.place_orders(curPrice, symbol, right, quantity,
-                             parentLimitPercent, stopLossPercent, takeProfitPercent)
-
-    ib.disconnect()
-
-
-# ib = IB()
-# ib.connect('127.0.0.1', 7497, clientId=random.randint(0, 9999))
-# op = OrderPlacer(ib=ib)
-# op.place_orders(curPrice=441.78, symbol='SPY', right='C', quantity=1,
-#                 parentLimitPercent=5, stopLossPercent=60, takeProfitPercent=40)
-
-# ib.disconnect()
+        return None

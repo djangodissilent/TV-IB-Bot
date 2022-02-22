@@ -5,7 +5,6 @@ import random
 
 from ib_insync import *
 import asyncio
-import multiprocessing
 
 from strategy import OrderPlacer
 
@@ -22,17 +21,16 @@ pubSubClient.subscribe('TradingView')
 
 
 async def check_messages():
-    print(f'{time.time()} - Checking for Trading View messages')
+    print(f'{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} - Checking for Trading View alerts...')
     mes = pubSubClient.get_message()
     if mes and mes['type'] == 'message':
         print(mes)
         data = json.loads(mes['data'])
-        # place the orders
-        # run the place order in a different process
 
-
-        await op.place_orders(curPrice=float(data['curPrice']), symbol=data['symbol'], right=data['right'])
-
+        try:
+            await op.place_orders(stock_price=float(data['stock_price']), symbol=data['symbol'], right=data['right'])
+        except:
+            print('Error in placing orders')
 
 async def run_periodicallly(interval, func):
     while True:
@@ -40,5 +38,7 @@ async def run_periodicallly(interval, func):
 
 
 event_loop = asyncio.get_event_loop()
-event_loop.run_until_complete(future=run_periodicallly(interval=1, func=check_messages))
 
+polling_interval = 1
+event_loop.run_until_complete(
+    future=run_periodicallly(interval=polling_interval, func=check_messages))
