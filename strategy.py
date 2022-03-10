@@ -12,8 +12,9 @@ import asyncio
 
 
 class OrderPlacer:
-    def __init__(self, ib) -> None:
+    def __init__(self, ib: IB, trial: bool) -> None:
         self.ib = ib
+        self.trial = trial
 
     def round_nearest(self, num: float, to: float) -> float:
         """
@@ -55,7 +56,7 @@ class OrderPlacer:
         Returns:
             Contract: ContractDetails
         """
-        stock_price = 448.7 if stock_price is None else stock_price
+        stock_price = stock_price
         cur_month = datetime.datetime.now(
             tz=timezone('US/Eastern')).strftime(format='%Y%m')
         contract = Option(symbol=symbol, exchange='SMART', right=right,
@@ -70,6 +71,8 @@ class OrderPlacer:
         nextExpiryContracts = list(filter(lambda con: con.realExpirationDate ==
                                    nextExpiryDate, contracts))
 
+        if not nextExpiryContracts:
+            raise Exception('No contract found')
         # get the closest contract to the money
         # - If tie and right is call, get the one with the lower strike price
         # - If tie and right is put, get the one with the higher strike price
@@ -89,12 +92,11 @@ class OrderPlacer:
         Returns:
             Ticker: Ticker for the contract
         """
-        self.ib.reqMarketDataType(marketDataType=1)
-        data = self.ib.reqMktData(contract, '', True, False)
+        self.ib.reqMarketDataType(marketDataType=1 if not self.trial else 4)
+        # data = self.ib.reqMktData(contract, '', True, False)
         tickers = await self.ib.reqTickersAsync(contract)
-        while math.isnan(tickers[0].ask):
-            await asyncio.sleep(0.01)
-            tickers = await self.ib.reqTickersAsync(contract)
+        if math.isnan(tickers[0].ask):
+            raise Exception('Ticker is nan')
         return tickers
 
     async def place_orders(self, stock_price: float, symbol='SPY', right: str = 'C', quantity: int = 1, parentLimitPercent: int = 5, stopLossPercent: int = 60, takeProfitPercent: int = 40) -> None:
@@ -122,14 +124,16 @@ class OrderPlacer:
         # get the current ask for the contract to calculate
         # - limit order (ask + (ask)* parentLimitPercent%)
         limitPercent = parentLimitPercent
-        self.ib.reqMarketDataType(marketDataType=1)  # chage to 1 at production
-
+        # chage to 1 at production
+        self.ib.reqMarketDataType(marketDataType=1 if not self.trial else 4)
         tickers = await self.get_tickers(contract)
         lmtPrice = self.calculate_price(tickers[0].ask, limitPercent, minTick)
         initialTakeProfit = self.calculate_price(
             lmtPrice, takeProfitPercent, minTick)
         initialStopLoss = self.calculate_price(
             lmtPrice, -stopLossPercent, minTick)
+
+        initialStopLoss = max(initialStopLoss, minTick)
 
         print("Ask for the contract: ", tickers[0].ask)
         print("Initial LmtPrice +5%: ", lmtPrice)
@@ -153,8 +157,13 @@ class OrderPlacer:
         for ord in [profitTaker, stopLoss]:
             self.ib.placeOrder(contract, ord)
 
-        while not parentTrade.isDone():
+        maxRetries = 500
+        while not parentTrade.isDone() and maxRetries > 0:
             await asyncio.sleep(0.01)
+            maxRetries -= 1
+
+        if maxRetries == 0:
+            raise Exception('Parent order timed out')
 
         # modify the children orders based on avg fill price
         averageFillPrice = parentTrade.orderStatus.avgFillPrice
@@ -169,9 +178,8 @@ class OrderPlacer:
 
         print("Avg Fill Price: ", averageFillPrice)
         print("Take Profit Price: ", takeProfitPrice)
-        print("Stop Loss Price 40%: ", stopLossPrice)
-        childrenTrades = []
+        print("Stop Loss Price: ", stopLossPrice)
         for order in [profitTaker, stopLoss]:
-            childrenTrades.append(self.ib.placeOrder(contract, order))
+            self.ib.placeOrder(contract, order)
 
         return None
