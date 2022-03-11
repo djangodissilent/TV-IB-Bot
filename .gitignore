@@ -1,1 +1,6 @@
 bot
+__pycache__
+TODOS.txt
+access_log.txt
+error_log.txt
+headless.py
