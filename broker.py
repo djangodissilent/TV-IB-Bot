@@ -14,7 +14,7 @@ redisClient = redis.Redis(host='localhost', port=6379, db=0)
 pubSubClient = redisClient.pubsub()
 pubSubClient.subscribe('TradingView')
 
-TRIAL_MODE = True
+TRIAL_MODE = False
 
 
 async def check_messages():
@@ -22,9 +22,11 @@ async def check_messages():
     mes = pubSubClient.get_message()
     if mes and mes['type'] == 'message':
         print(mes)
-        data = json.loads(mes['data'])
 
         try:
+            data = json.loads(mes['data'])
+            if not data['right'] or not data['stock_price'] or not data['symbol']:
+                return None
             ib = IB()
             await ib.connectAsync('127.0.0.1', 7497, clientId=random.randint(0, 9999))
             op = OrderPlacer(ib=ib, trial=TRIAL_MODE)
