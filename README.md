@@ -14,7 +14,7 @@
 
 
 ```
-- Change TWS API configurations
+Change TWS API configurations
 ```
 ![api_conf](./static/api_conf.png?raw=true)
 
