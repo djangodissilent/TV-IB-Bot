@@ -12,9 +12,9 @@ import asyncio
 
 
 class OrderPlacer:
-    def __init__(self, ib: IB, trial: bool) -> None:
+    def __init__(self, ib: IB, data_type: bool) -> None:
         self.ib = ib
-        self.trial = trial
+        self.data_type = data_type
 
     def round_nearest(self, num: float, to: float) -> float:
         """
@@ -92,7 +92,7 @@ class OrderPlacer:
         Returns:
             Ticker: Ticker for the contract
         """
-        self.ib.reqMarketDataType(marketDataType=1 if not self.trial else 4)
+        self.ib.reqMarketDataType(marketDataType=1 if not self.data_type else 4)
         # data = self.ib.reqMktData(contract, '', True, False)
         tickers = await self.ib.reqTickersAsync(contract)
         if math.isnan(tickers[0].ask):
@@ -125,7 +125,7 @@ class OrderPlacer:
         # - limit order (ask + (ask)* parentLimitPercent%)
         limitPercent = parentLimitPercent
         # chage to 1 at production
-        self.ib.reqMarketDataType(marketDataType=1 if not self.trial else 4)
+        self.ib.reqMarketDataType(marketDataType=1 if not self.data_type else 4)
         tickers = await self.get_tickers(contract)
         lmtPrice = self.calculate_price(tickers[0].ask, limitPercent, minTick)
         initialTakeProfit = self.calculate_price(
@@ -167,6 +167,7 @@ class OrderPlacer:
 
         # modify the children orders based on avg fill price
         averageFillPrice = parentTrade.orderStatus.avgFillPrice
+
         takeProfitPrice = self.calculate_price(
             averageFillPrice, takeProfitPercent, minTick)
         stopLossPrice = self.calculate_price(

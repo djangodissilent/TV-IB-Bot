@@ -5,6 +5,7 @@ import redis
 import math
 import strategy
 
+import config
 
 app = Flask(__name__)
 redisClient = redis.Redis(host='localhost', port=6379, db=0)
@@ -28,5 +29,5 @@ def hello():
 
 
 if __name__ == '__main__':
-    serverPort = 5000
+    serverPort = config.config['server_port']
     app.run(port=serverPort, debug=True)
