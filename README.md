@@ -5,7 +5,7 @@
 </p>
 
 
- Automated tradeing bot using the [Interactive Brokers platform](https://www.interactivebrokers.com/en/home.php) to trade options on different assets using EMA and VWAP indicators from Trading View.
+ Automated trading bot using the [Interactive Brokers platform](https://www.interactivebrokers.com/en/home.php) to trade options on different assets using EMA and VWAP indicators from Trading View.
 
 
 [![Build Status](https://img.shields.io/travis/com/jacebrowning/template-python.svg)](https://travis-ci.com/jacebrowning/template-python)
